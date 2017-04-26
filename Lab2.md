@@ -1,0 +1,213 @@
+###  实验二: 互斥 & 死锁
+
+#### 一． 实验目的  
+ > +  通过观察、分析实验现象，深入理解理解互斥锁的原理及特点 掌握在POSIX 规范中的互斥函数的功能及使用方法   
+#### 二．实验要求  
+##### 2.1 实验环境要求 
+1. 硬件  
+	 > *  主机：Pentium III 以上
+    > *  内存：128MB 以上
+    > *  显示器：VGA 或更高
+    > * 硬盘空间：至少100MB 以上剩余空间
+
+2. 软件  
+>*Linux 操作系统，内核2.4.26 以上，预装有X-Window 、vi、gcc、gdb 和任 意web 浏览器。 
+3. 实验前的准备工作  阅读参考资料，了解线程的创建等相关系统调用。  
+4. 阅读参考资料，了解互斥锁的加解锁机制及相关的系统调用。
+> + 互斥锁的类型：
++ THREAD_MUTEX_NORMAL:不检测死锁，如果等待一个已经锁定的互斥量将会一直等待，即使是同一个线程锁定互斥量两次也会造成死锁，解除有其他线程锁定的互斥量将会引起不确定行为
+
+    +  PTHREAD_MUTEX_ERRORCHECK:检测错误，一个线程重新锁定同一个锁会返回  EDEADLK，如果解锁由其它线程锁定的互斥量或者没有锁定的互斥量就会返回错误
+PTHREAD_MUTEX_RECURSIVE:线程可以多次锁定同一个互斥锁，并且需要解锁和锁定次数对应，尝试解除没有锁定的互斥锁和解除由其他线程锁定的互斥锁将会引起错误。
+
++ PTHREAD_MUTEXT_DEFAULT:重复锁定一个锁会导致不确定行为，其他和NORMAL相同.(一般来说它会映射到PTHREAD_MUTEX_NORMAL)
+
+
+####  三、实验内容
++ 3.1找到`thread.c` 的代码临界区，用临界区解决`main_counter `与`sum `不同步的问题。  
++ 3.2阅读下列代码，回答问题：  
+```cpp
+#include<stdio.h> 
+#include<sys/types.h> 
+#include<unistd.h> 
+#include<ctype.h> 
+#include<pthread.h>  
+
+ #define LOOP_TIMES 10000  
+
+pthread_mutex_t mutex1=PTHREAD_MUTEX_INITIALIZER; 
+pthread_mutex_t mutex2=PTHREAD_MUTEX_INITIALIZER;
+ 
+  void* thread_worker(void *); 
+  void critical_section(int threadd_num,int i);
+  
+  int main(int argc,char *argv[]){ 
+   int rtn,i; 
+   pthread_t pthread_id=0;  
+   rtn=pthread_create(&pthread_id,NULL,thread_worker,NULL);
+   if(rtn!=0){ 
+       printf("pthread_create ERROR!\n"); 
+         return -1; 
+          }  
+   for(i=0;i<LOOP_TIMES;i++){  
+   
+   pthread_mutex_lock(&mutex1);   
+   pthread_mutex_lock(&mutex2);
+   
+   critical_section(1,i);   
+   
+   pthread_mutex_unlock(&mutex2);   
+   pthread_mutex_unlock(&mutex1);   
+	   }  
+   pthread_mutex_destroy(&mutex1);  
+   pthread_mutex_destroy(&mutex2);
+   return 0;  
+}   
+
+void *thread_worker(void* p){  
+int i;  
+ for(i=0;i<LOOP_TIMES;i++){   
+ 
+	 pthread_mutex_lock(&mutex2);   
+	 pthread_mutex_lock(&mutex1);
+	   
+	 critical_section(2,i); 
+	 
+	pthread_mutex_unlock(&mutex2);   
+	pthread_mutex_unlock(&mutex1);   
+	
+	}  
+}   
+
+void critical_section(int thread_num,int i){ 
+ printf("Thread%d:%d\n",thread_num,i);
+ }
+```
+  +   你预想`deadlock.c `的运行结果会如何？ 
+ +  答：我预想： 多个子线程在不断创建的过程中 ，随机出现停止现象。
+  +    `deadlock.c` 的实际运行结果如何？多次运行每次的现象都一样吗？为什么会这样？  
+ +  答：实际运行情况和我预想的宏观表现一样，每次运行的时候，停止的时刻都不一致。造成这现象的原因是由于各个子线程由于进行内容竞争的时候造成资源死锁，互相申请不到资源进行自我的创建。又因为线程对于CUP的使用是处于抢占式，所以每一次的运行程序，各个子线程的抢占时机不同，导致了每次形成死锁的时间点不同。便提现了上述的程序停止进行的现象。
+### 四、实验结果   
++   4.1 通过加锁可修改`thread.c`程序，使得`main_counter`与`sum`值同步，源代码如下：  
+```cpp
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <ctype.h>
+#include <pthread.h>
+#include <semaphore.h>
+
+#define MAX_THREAD 3
+
+unsigned static long long main_counter,counter[MAX_THREAD];
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void *thread_worker(void*);
+
+int main(int argc,char argv[]){
+
+        int i,rtn;
+        int *param;
+        char ch;
+        pthread_t  pthread_id[MAX_THREAD] = {0};
+
+        for(i=0;i<MAX_THREAD;i++)
+        {
+                param = (int*)malloc(sizeof(int));
+                *param = i;
+                rtn=pthread_create(&pthread_id[i],NULL,thread_worker,param);
+        }
+        do{
+                unsigned long long sum =0;
+                for(i =0;i<MAX_THREAD;i++)
+                {
+                        sum+=counter[i];
+                        printf("counter[%d]=%llu\n",i,counter[i]);
+                }
+
+                printf("main_counter = %llu/sum = %llu\n",main_counter,sum);
+
+                // open the lock
+                //pthread_mutex_unlock(&mutex);
+        }while((ch = getchar())!='q');
+
+        //destroy lock
+        //pthread_mutex_destroy(&mutex);
+        return 0;
+}
+
+
+void* thread_worker(void* p)
+{
+        int thread_num;
+        thread_num =*(int*)p;
+        for(;;)
+        {
+                //Add lock
+                //pthread_mutex_lock(&mutex);
+                main_counter++;
+                counter[thread_num]++;
+
+                //open the lock
+        //      pthread_mutex_unlock(&mutex);
+        }
+        free((int*)p);
+}
+
+```
+
++ 4.2  修改后的接触死锁的程序如下：
+```cpp
+#include <stdio.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <ctype.h>
+#include <pthread.h>
+
+#define LOOP_TIMES 10000
+
+pthread_mutex_t mutex1 = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex2 = PTHREAD_MUTEX_INITIALIZER;
+
+void *thread_worker(void *);
+void critical_section(int thread_num,int i);
+
+int main(int argc,char *argv[]){
+        int rtn,i;
+        pthread_t pthread_id = 0;
+        rtn = pthread_create(&pthread_id,NULL,thread_worker,NULL);
+        if(rtn!=0){
+                printf("pthread_create ERROR!\n");
+                return -1;
+        }
+        for(i =0;i<LOOP_TIMES;i++)
+        {
+                pthread_mutex_lock(&mutex1);
+                pthread_mutex_lock(&mutex2);
+                critical_section(1,i);
+                pthread_mutex_unlock(&mutex2);
+                pthread_mutex_unlock(&mutex1);
+        }
+        pthread_mutex_destroy(&mutex1);
+        pthread_mutex_destroy(&mutex2);
+        return 0;
+}
+
+void *thread_worker(void *p){
+        int i;
+        for(i=0 ;i<LOOP_TIMES;i++)
+        {
+                pthread_mutex_lock(&mutex1);
+                pthread_mutex_lock(&mutex2);
+                critical_section(2,i);
+                pthread_mutex_unlock(&mutex2);
+                pthread_mutex_unlock(&mutex1);
+        }
+}
+
+void critical_section(int thread_num,int i){
+        printf("Thread%d:%d\n",thread_num,i);
+}
+
+```
